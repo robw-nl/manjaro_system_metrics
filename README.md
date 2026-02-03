@@ -1,4 +1,4 @@
-# manjaro_system_metrics
+# manjaro_system_metrics: a highly optimized daemon with a very small running footprint.
 
 1. Project Overview
 Manjaro System Metrics is a high-efficiency, low-latency dashboard written in C for monitoring system power, thermals, and costs on Manjaro Linux (KDE Plasma).
