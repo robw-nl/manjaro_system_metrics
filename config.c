@@ -1,128 +1,168 @@
+#include "config.h"
+#include "discovery.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "config.h"
+#include <unistd.h>
+#include <pwd.h>
 
-void parse_double(const char *line, const char *key, double *out) {
-    char *found = strstr(line, key);
-    if (found == line) {
-        char *eq = strchr(found, '=');
-        if (eq) *out = atof(eq + 1);
-    }
+#define SET_STR(var, val) strncpy(var, val, sizeof(var) - 1)
+#define SET_VAL(var, val) var = val
+
+#define PARSE_STR(name, target, size) \
+if (strcmp(key, name) == 0) { \
+    strncpy(target, val, size - 1); \
+    continue; \
+}
+#define PARSE_DBL(name, target) \
+if (strcmp(key, name) == 0) { \
+    target = atof(val); \
+    continue; \
+}
+#define PARSE_INT(name, target) \
+if (strcmp(key, name) == 0) { \
+    target = atoi(val); \
+    continue; \
 }
 
-void parse_int(const char *line, const char *key, int *out) {
-    char *found = strstr(line, key);
-    if (found == line) {
-        char *eq = strchr(found, '=');
-        if (eq) *out = atoi(eq + 1);
-    }
-}
+void set_defaults(AppConfig *c) {
+    // UI Defaults
+    SET_VAL(c->font_size, 32);
+    SET_STR(c->font_family, "Hack Nerd Font");
+    SET_STR(c->color_safe, "#a6e3a1");
+    SET_STR(c->color_warn, "#fab387");
+    SET_STR(c->color_crit, "#f38ba8");
+    SET_STR(c->color_sep, "#585b70");
+    SET_STR(c->ssd_label, "SSD");
 
-void parse_str(const char *line, const char *key, char *out) {
-    char *found = strstr(line, key);
-    if (found == line) {
-        char *eq = strchr(found, '=');
-        if (eq) {
-            char *start = eq + 1;
-            while (*start == ' ' || *start == '\t') start++;
-            sscanf(start, "%[^\n]", out);
-            char *newline = strchr(out, '\n'); if (newline) *newline = '\0';
-            char *cr = strchr(out, '\r'); if (cr) *cr = '\0';
-        }
-    }
-}
-
-AppConfig load_config(const char *filename) {
-    AppConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-
-    // --- DEFAULTS ---
-    strcpy(cfg.path_panel, "/dev/shm/dashboard_panel.txt");
-    strcpy(cfg.path_popup, "/dev/shm/dashboard_tooltip.txt");
-    cfg.update_ms = 1000;
-    cfg.sync_sec = 60;
-    strcpy(cfg.output_format, "json");
-    strcpy(cfg.start_date, "01-01-2024");
-    strcpy(cfg.ssd_label, "SSD");
-
-    cfg.font_size = 11;
-    strcpy(cfg.font_family, "Monospace");
-
-    cfg.psu_efficiency = 0.85;
-    cfg.mobo_overhead = 0.05;
-
-    // Speaker Defaults
-    cfg.speakers_eco = 4.0;
-    cfg.speakers_standby = 12.0;
-    cfg.speakers_active = 22.0;
-    cfg.speakers_timeout_sec = 900; // Default 15 mins
+    // Hardware Defaults
+    SET_STR(c->hw_gpu, "amdgpu");
+    SET_STR(c->hw_cpu, "k10temp");
+    SET_STR(c->hw_net, "r8169");
+    SET_STR(c->hw_ram, "spd5118");
+    SET_STR(c->hw_disk, "nvme"); // <--- NEW Default
+    SET_STR(c->path_monitor, "/sys/class/drm/card1-HDMI-A-1/status");
 
     // Threshold Defaults
-    cfg.limit_ssd_warn = 50.0; cfg.limit_ssd_crit = 70.0;
-    cfg.limit_ram_warn = 60.0; cfg.limit_ram_crit = 80.0;
-    cfg.limit_net_warn = 60.0; cfg.limit_net_crit = 80.0;
-    cfg.limit_soc_warn = 20.0; cfg.limit_soc_crit = 45.0;
+    SET_VAL(c->limit_mhz_warn, 3500); SET_VAL(c->limit_mhz_crit, 4500);
+    SET_VAL(c->limit_temp_warn, 60.0); SET_VAL(c->limit_temp_crit, 80.0);
+    SET_VAL(c->limit_ssd_warn, 50.0); SET_VAL(c->limit_ssd_crit, 70.0);
+    SET_VAL(c->limit_ram_warn, 50.0); SET_VAL(c->limit_ram_crit, 70.0);
+    SET_VAL(c->limit_net_warn, 50.0); SET_VAL(c->limit_net_crit, 70.0);
+    SET_VAL(c->limit_wall_warn, 100.0); SET_VAL(c->limit_wall_crit, 150.0);
+    SET_VAL(c->limit_soc_warn, 30.0); SET_VAL(c->limit_soc_crit, 45.0);
 
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        return cfg;
-    }
+    // Power Constants
+    SET_VAL(c->psu_efficiency, 0.85);
+    SET_VAL(c->mobo_overhead, 0.05);
+    SET_VAL(c->pc_rest_base, 10.0);
+    SET_VAL(c->periph_watt, 5.0);
+    SET_VAL(c->mon_standby, 0.5);
+    SET_VAL(c->mon_logic, 10.0);
+    SET_VAL(c->mon_backlight_max, 30.0);
+    SET_VAL(c->mon_dim_preset, 0.2);
+    SET_VAL(c->mon_brightness_preset, 0.8);
+    SET_VAL(c->speakers_active, 20.0);
+    SET_VAL(c->speakers_standby, 10.0);
+    SET_VAL(c->speakers_eco, 5.0);
+    SET_VAL(c->euro_per_kwh, 0.25);
 
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
+    // Timings
+    SET_VAL(c->update_ms, 1000);
+    SET_VAL(c->sync_sec, 60);
+    SET_VAL(c->speakers_timeout_sec, 900);
+    SET_VAL(c->mon_dim_timeout_sec, 120);
+    SET_VAL(c->mon_off_timeout_sec, 300);
+
+    // Paths
+    SET_STR(c->path_panel, "/dev/shm/dashboard_panel.txt");
+    SET_STR(c->path_tooltip, "/dev/shm/dashboard_tooltip.txt");
+
+    const char *home = getenv("HOME");
+    if (!home) home = getpwuid(getuid())->pw_dir;
+    snprintf(c->path_data, MAX_PATH, "%s/.config/manjaro_system_metrics/data/stats.dat", home);
+
+    SET_STR(c->start_date, "Unknown");
+}
+
+AppConfig load_config(const char *path) {
+    AppConfig c;
+    set_defaults(&c);
+    discover_hardware(&c);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return c;
+
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || line[0] == '\n') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = '\0';
+        char *key = line;
+        char *val = eq + 1;
+        val[strcspn(val, "\n")] = 0;
 
-        parse_int(line, "update_ms", &cfg.update_ms);
-        parse_int(line, "sync_sec", &cfg.sync_sec);
-        parse_str(line, "output_format", cfg.output_format);
-        parse_str(line, "start_date", cfg.start_date);
+        // Hardware
+        PARSE_STR("hw_gpu", c.hw_gpu, 32);
+        PARSE_STR("hw_cpu", c.hw_cpu, 32);
+        PARSE_STR("hw_net", c.hw_net, 32);
+        PARSE_STR("hw_ram", c.hw_ram, 32);
+        PARSE_STR("hw_disk", c.hw_disk, 32); // <--- NEW PARSER
+        PARSE_STR("path_monitor", c.path_monitor, 256);
+        PARSE_STR("path_audio", c.path_audio, 256); // <--- NEW PARSER
 
-        parse_double(line, "pc_rest_base", &cfg.pc_rest_base);
-        parse_double(line, "mon_base", &cfg.mon_base);
-        parse_double(line, "mon_delta", &cfg.mon_delta);
-        parse_double(line, "periph_watt", &cfg.periph_watt);
+        // UI & Paths
+        PARSE_INT("font_size", c.font_size);
+        PARSE_STR("font_family", c.font_family, 64);
+        PARSE_STR("color_safe", c.color_safe, 16);
+        PARSE_STR("color_warn", c.color_warn, 16);
+        PARSE_STR("color_crit", c.color_crit, 16);
+        PARSE_STR("color_sep", c.color_sep, 16);
+        PARSE_STR("ssd_label", c.ssd_label, 32);
+        PARSE_STR("start_date", c.start_date, 32);
+        PARSE_STR("path_panel", c.path_panel, MAX_PATH);
+        PARSE_STR("path_tooltip", c.path_tooltip, MAX_PATH);
+        PARSE_STR("path_data", c.path_data, MAX_PATH);
 
-        // Generic Speaker Parsing
-        parse_double(line, "speakers_eco", &cfg.speakers_eco);
-        parse_double(line, "speakers_standby", &cfg.speakers_standby);
-        parse_double(line, "speakers_active", &cfg.speakers_active);
+        // Thresholds
+        PARSE_DBL("limit_mhz_warn", c.limit_mhz_warn);
+        PARSE_DBL("limit_mhz_crit", c.limit_mhz_crit);
+        PARSE_DBL("limit_temp_warn", c.limit_temp_warn);
+        PARSE_DBL("limit_temp_crit", c.limit_temp_crit);
+        PARSE_DBL("limit_ssd_warn", c.limit_ssd_warn);
+        PARSE_DBL("limit_ssd_crit", c.limit_ssd_crit);
+        PARSE_DBL("limit_ram_warn", c.limit_ram_warn);
+        PARSE_DBL("limit_ram_crit", c.limit_ram_crit);
+        PARSE_DBL("limit_net_warn", c.limit_net_warn);
+        PARSE_DBL("limit_net_crit", c.limit_net_crit);
+        PARSE_DBL("limit_wall_warn", c.limit_wall_warn);
+        PARSE_DBL("limit_wall_crit", c.limit_wall_crit);
+        PARSE_DBL("limit_soc_warn", c.limit_soc_warn);
+        PARSE_DBL("limit_soc_crit", c.limit_soc_crit);
 
-        // Timeout Parsing (Convert Mins to Secs)
-        int min_val = 0;
-        parse_int(line, "speakers_timeout_min", &min_val);
-        if (min_val > 0) cfg.speakers_timeout_sec = min_val * 60;
+        // Power
+        PARSE_DBL("psu_efficiency", c.psu_efficiency);
+        PARSE_DBL("mobo_overhead", c.mobo_overhead);
+        PARSE_DBL("pc_rest_base", c.pc_rest_base);
+        PARSE_DBL("periph_watt", c.periph_watt);
+        PARSE_DBL("mon_standby", c.mon_standby);
+        PARSE_DBL("mon_logic", c.mon_logic);
+        PARSE_DBL("mon_backlight_max", c.mon_backlight_max);
+        PARSE_DBL("mon_dim_preset", c.mon_dim_preset);
+        PARSE_DBL("mon_brightness_preset", c.mon_brightness_preset);
+        PARSE_DBL("speakers_active", c.speakers_active);
+        PARSE_DBL("speakers_standby", c.speakers_standby);
+        PARSE_DBL("speakers_eco", c.speakers_eco);
+        PARSE_DBL("euro_per_kwh", c.euro_per_kwh);
 
-        parse_double(line, "euro_per_kwh", &cfg.euro_per_kwh);
-        parse_double(line, "mobo_overhead", &cfg.mobo_overhead);
-        parse_double(line, "psu_efficiency", &cfg.psu_efficiency);
-
-        parse_double(line, "limit_mhz_warn", &cfg.limit_mhz_warn);
-        parse_double(line, "limit_mhz_crit", &cfg.limit_mhz_crit);
-        parse_double(line, "limit_temp_warn", &cfg.limit_temp_warn);
-        parse_double(line, "limit_temp_crit", &cfg.limit_temp_crit);
-        parse_double(line, "limit_ssd_warn", &cfg.limit_ssd_warn);
-        parse_double(line, "limit_ssd_crit", &cfg.limit_ssd_crit);
-        parse_double(line, "limit_ram_warn", &cfg.limit_ram_warn);
-        parse_double(line, "limit_ram_crit", &cfg.limit_ram_crit);
-        parse_double(line, "limit_net_warn", &cfg.limit_net_warn);
-        parse_double(line, "limit_net_crit", &cfg.limit_net_crit);
-        parse_double(line, "limit_soc_warn", &cfg.limit_soc_warn);
-        parse_double(line, "limit_soc_crit", &cfg.limit_soc_crit);
-        parse_double(line, "limit_wall_warn", &cfg.limit_wall_warn);
-        parse_double(line, "limit_wall_crit", &cfg.limit_wall_crit);
-
-        parse_str(line, "ssd_label", cfg.ssd_label);
-        parse_int(line, "font_size", &cfg.font_size);
-        parse_str(line, "font_family", cfg.font_family);
-        parse_str(line, "main_ssd", cfg.main_ssd);
-
-        parse_str(line, "color_safe", cfg.color_safe);
-        parse_str(line, "color_warn", cfg.color_warn);
-        parse_str(line, "color_crit", cfg.color_crit);
-        parse_str(line, "color_sep", cfg.color_sep);
+        // Timings
+        PARSE_INT("update_ms", c.update_ms);
+        PARSE_INT("sync_sec", c.sync_sec);
+        PARSE_INT("speakers_timeout_sec", c.speakers_timeout_sec);
+        PARSE_INT("mon_dim_timeout_sec", c.mon_dim_timeout_sec);
+        PARSE_INT("mon_off_timeout_sec", c.mon_off_timeout_sec);
     }
-
-    fclose(file);
-    return cfg;
+    fclose(f);
+    return c;
 }

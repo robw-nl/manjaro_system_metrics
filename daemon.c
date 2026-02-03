@@ -3,74 +3,41 @@
 #include <unistd.h>
 #include <time.h>
 #include <string.h>
+#include <errno.h>
+#include <math.h>
+
 #include "config.h"
 #include "sensors.h"
+#include "json_builder.h"
+#include "power_model.h"
+#include "discovery.h"
 
 #define MAX_PATH 4096
 
-// --- PROTOTYPES ---
-const char* get_color(double val, double warn, double crit, const AppConfig *cfg);
-void write_panel_json(FILE *fp, const AppConfig *cfg, SystemVitals v, double soc_w, double system_w, double ext_w, double wall_w, double cost);
-void write_atomic_file(const char *final_path, const AppConfig *cfg,
-                       void (*write_func)(FILE*, const AppConfig*, SystemVitals, double, double, double, double, double),
-                       SystemVitals v, double soc_w, double sys_w, double ext_w, double wall_w, double cost);
-
-const char* get_color(double val, double warn, double crit, const AppConfig *cfg) {
-    if (val < 1.0) return cfg->color_safe;
-    if (val >= crit) return cfg->color_crit;
-    if (val >= warn) return cfg->color_warn;
-    return cfg->color_safe;
-}
-
-void write_panel_json(FILE *fp, const AppConfig *cfg, SystemVitals v, double soc_w, double system_w, double ext_w, double wall_w, double cost) {
-    const char* c_mhz  = get_color(v.cpu_mhz, cfg->limit_mhz_warn, cfg->limit_mhz_crit, cfg);
-    const char* c_soc  = get_color(v.max_temp, cfg->limit_temp_warn, cfg->limit_temp_crit, cfg);
-    const char* c_ssd  = get_color(v.ssd_temp, cfg->limit_ssd_warn, cfg->limit_ssd_crit, cfg);
-    const char* c_ram  = get_color(v.ram_temp, cfg->limit_ram_warn, cfg->limit_ram_crit, cfg);
-    const char* c_net  = get_color(v.net_temp, cfg->limit_net_warn, cfg->limit_net_crit, cfg);
-    const char* c_wall = get_color(wall_w, cfg->limit_wall_warn, cfg->limit_wall_crit, cfg);
-
-    fprintf(fp, "{"
-    "\"font_size\":%d,"
-    "\"font_family\":\"%s\","
-    "\"cpu\":{\"val\":%d,\"unit\":\"MHz\",\"color\":\"%s\"},"
-    "\"temp\":{\"val\":%.1f,\"unit\":\"°C\",\"color\":\"%s\"},"
-    "\"ssd\":{\"val\":%.0f,\"unit\":\"°C\",\"color\":\"%s\",\"label\":\"%s\"},"
-    "\"ram\":{\"val\":%.0f,\"unit\":\"°C\",\"color\":\"%s\"},"
-    "\"net\":{\"val\":%.0f,\"unit\":\"°C\",\"color\":\"%s\"},"
-    "\"soc\":{\"val\":%.1f,\"unit\":\"W\",\"color\":\"%s\"},"
-    "\"sys\":{\"val\":%.1f,\"unit\":\"W\",\"color\":\"%s\"},"
-    "\"ext\":{\"val\":%.1f,\"unit\":\"W\",\"color\":\"%s\"},"
-    "\"wall\":{\"val\":%.1f,\"unit\":\"W\",\"color\":\"%s\"},"
-    "\"cost\":{\"val\":%.2f,\"unit\":\"€\",\"color\":\"%s\"},"
-    "\"sep_color\":\"%s\""
-    "}",
-    cfg->font_size, cfg->font_family,
-    v.cpu_mhz, c_mhz,
-    v.max_temp, c_soc,
-    v.ssd_temp, c_ssd, cfg->ssd_label,
-    v.ram_temp, c_ram,
-    v.net_temp, c_net,
-    soc_w, cfg->color_safe,
-    system_w, cfg->color_safe,
-    ext_w, cfg->color_safe,
-    wall_w, c_wall,
-    cost, cfg->color_safe,
-    cfg->color_sep
-    );
-}
-
-void write_atomic_file(const char *final_path, const AppConfig *cfg,
-                       void (*write_func)(FILE*, const AppConfig*, SystemVitals, double, double, double, double, double),
-                       SystemVitals v, double soc_w, double sys_w, double ext_w, double wall_w, double cost) {
+void update_panel_file(const char *final_path, const AppConfig *cfg, const SystemVitals *v, const DashboardPower *pwr) {
     char tmp_path[MAX_PATH];
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", final_path);
     FILE *fp = fopen(tmp_path, "w");
     if (!fp) return;
-    write_func(fp, cfg, v, soc_w, sys_w, ext_w, wall_w, cost);
-    fflush(fp);
-    fclose(fp);
+    json_build_panel(fp, cfg, v, pwr);
+    fflush(fp); fclose(fp);
     rename(tmp_path, final_path);
+}
+
+void update_tooltip_file(const char *final_path, const AppConfig *cfg, const Accumulator *acc, const DashboardPower *pwr) {
+    char tmp_path[MAX_PATH];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", final_path);
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) return;
+    json_build_tooltip(fp, cfg, acc, pwr);
+    fflush(fp); fclose(fp);
+    rename(tmp_path, final_path);
+}
+
+void sleep_until_next_tick(struct timespec *target, int interval_ms) {
+    target->tv_nsec += interval_ms * 1000000L;
+    if (target->tv_nsec >= 1000000000L) { target->tv_nsec -= 1000000000L; target->tv_sec++; }
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, target, NULL) == EINTR) { }
 }
 
 int main() {
@@ -78,114 +45,83 @@ int main() {
     ssize_t len = readlink("/proc/self/exe", config_path, sizeof(config_path) - 1);
     if (len != -1) {
         config_path[len] = '\0';
-        char *last_slash = strrchr(config_path, '/');
-        if (last_slash) strcpy(last_slash + 1, "metrics.conf");
-    } else {
-        strcpy(config_path, "metrics.conf");
-    }
+        char *last = strrchr(config_path, '/');
+        if (last) strcpy(last + 1, "metrics.conf");
+    } else strcpy(config_path, "metrics.conf");
 
     AppConfig cfg = load_config(config_path);
-    if (cfg.psu_efficiency <= 0.0) cfg.psu_efficiency = 0.85;
-
-    init_sensors(cfg.main_ssd);
-    Accumulator acc = load_from_ssd();
+    SensorContext sensors;
+    init_sensors(&sensors, &cfg);
+    PowerModelState logic_state;
+    init_power_model(&logic_state, &cfg);
+    Accumulator acc = load_from_ssd(&sensors);
 
     time_t last_sync = time(NULL);
-    double session_peak_w = 0.0;
-    double session_max_temp = 0.0;
-    char peak_time_str[16] = "--:--";
-    double last_uptime = 0.0;
+    PeripheralState periph_cache = {0, 1, 0, 0.0};
+    unsigned int tick = 0;
+    struct timespec next_tick;
+    clock_gettime(CLOCK_MONOTONIC, &next_tick);
 
-    // --- STATE VARIABLES ---
-    PeripheralState periph_cache = {0, 1, 1.0};
-    int tick_count = 0;
-
-    // Use Configured Timeout (Active/Standby at boot)
-    int audio_cooldown = cfg.speakers_timeout_sec;
+    // --- State for Hysteresis (place these right before the loop) ---
+    SystemVitals last_v = {0};
+    DashboardPower last_pwr = {0};
+    int force_update = 1; // Ensures we write the first iteration
 
     while (1) {
-        SystemVitals v = read_fast_vitals();
+        DashboardPower pwr;
 
-        if (tick_count % 5 == 0) {
-            periph_cache = read_slow_vitals();
-            tick_count = 0;
-        }
-        tick_count++;
+        // 1. Inputs: Check Hardware States
+        periph_cache.is_monitor_connected = check_monitor_connected(&sensors);
+        periph_cache.is_audio_active = check_audio_active(&sensors);
 
-        time_t now_time = time(NULL);
-        double uptime = (double)get_uptime();
+        // 2. Read Vitals: Gated by Monitor Status (Ghost Read Prevention)
+        SystemVitals v = read_fast_vitals(&sensors, &periph_cache);
 
-        if (uptime < last_uptime || last_uptime == 0) {
-            session_peak_w = 0.0;
-            session_max_temp = 0.0;
-            strcpy(peak_time_str, "--:--");
-            audio_cooldown = cfg.speakers_timeout_sec; // Reset on reboot
-        }
-        last_uptime = uptime;
-
-        // --- 3-STATE GENERIC AUDIO LOGIC ---
-        double audio_w = 0.0;
-
+        // 3. Audio Volume: Only poll if audio is actually playing
         if (periph_cache.is_audio_active) {
-            // 1. ACTIVE
-            audio_w = cfg.speakers_active;
-            audio_cooldown = cfg.speakers_timeout_sec; // Reset Timer
-        } else if (audio_cooldown > 0) {
-            // 2. STANDBY (Cooldown)
-            audio_w = cfg.speakers_standby;
-            audio_cooldown--;
+            if (tick % 5 == 0) periph_cache.volume_ratio = check_audio_volume();
         } else {
-            // 3. ECO
-            audio_w = cfg.speakers_eco;
+            periph_cache.volume_ratio = 0.0;
         }
 
-        // --- Calculations ---
-        double soc_w = v.soc_w;
-        double system_w = cfg.pc_rest_base + (soc_w * cfg.mobo_overhead);
-
-        double mon_w = cfg.mon_base + (periph_cache.brightness * cfg.mon_delta);
-        if (!periph_cache.is_monitor_on) mon_w = cfg.mon_base * 0.1;
-
-        double ext_w = mon_w + cfg.periph_watt + audio_w;
-        double wall_w = ((soc_w + system_w) / cfg.psu_efficiency) + ext_w;
-
-        acc.total_ws += wall_w;
+        // 4. Brain: Calculate all power metrics
+        pwr = calculate_power(&logic_state, &cfg, &v, &periph_cache, &acc);
+        acc.total_ws += pwr.wall_w;
         acc.total_sec += 1.0;
-        double kwh = acc.total_ws / 3600000.0;
-        double cost = kwh * cfg.euro_per_kwh;
-        double avg_w = (acc.total_sec > 0) ? (acc.total_ws / acc.total_sec) : 0.0;
 
-        if (wall_w > session_peak_w) {
-            session_peak_w = wall_w;
-            struct tm *tm_now = localtime(&now_time);
-            strftime(peak_time_str, sizeof(peak_time_str), "%H:%M", tm_now);
-        }
-        if (v.max_temp > session_max_temp) session_max_temp = v.max_temp;
+        // 5. Output with Hysteresis: Only write to /dev/shm if values changed significantly
+        // Thresholds: Freq > 10MHz, Temp > 0.5C, Wall Power > 0.2W
+        if (force_update ||
+            abs(v.cpu_mhz - last_v.cpu_mhz) > 10 ||
+            fabs(v.max_temp - last_v.max_temp) > 0.5 ||
+            fabs(pwr.wall_w - last_pwr.wall_w) > 0.2 ||
+            (tick % 30 == 0)) // Heartbeat: Force write every 30 ticks
+        {
+            update_panel_file(cfg.path_panel, &cfg, &v, &pwr);
 
-        write_atomic_file(cfg.path_panel, &cfg, write_panel_json, v, soc_w, system_w, ext_w, wall_w, cost);
-
-        char tmp_popup[MAX_PATH];
-        snprintf(tmp_popup, sizeof(tmp_popup), "%s.tmp", cfg.path_popup);
-        FILE *ft = fopen(tmp_popup, "w");
-        if (ft) {
-            fprintf(ft, "Measuring Since: %s\n"
-            "Wall Avg: %.1fW / Peak: %.0fW\n"
-            "Today's Peak: %.0fW / %.0f°C\n"
-            "Peak Time: %s\n"
-            "------------------------------------------\n"
-            "Consumption: %.3f kWh\n"
-            "Total Cost: €%.2f\n"
-            "Total Time: %.0f:%02.0fh",
-            cfg.start_date, avg_w, session_peak_w, session_peak_w, session_max_temp, peak_time_str,
-            kwh, cost, acc.total_sec / 3600.0, (acc.total_sec / 60) - ((int)(acc.total_sec / 3600.0) * 60));
-            fflush(ft); fclose(ft); rename(tmp_popup, cfg.path_popup);
+            // Sync current state for next comparison
+            last_v = v;
+            last_pwr = pwr;
+            force_update = 0;
         }
 
+        // 6. Tooltip Update: Always on the 60s tick
+        if (tick % 60 == 0) {
+            update_tooltip_file(cfg.path_tooltip, &cfg, &acc, &pwr);
+        }
+
+        // 7. Persistence: Save to SSD based on sync_sec
+        time_t now_time = time(NULL);
         if (difftime(now_time, last_sync) >= cfg.sync_sec) {
-            save_to_ssd(acc); last_sync = now_time;
+            save_to_ssd(&sensors, acc);
+            last_sync = now_time;
         }
 
-        usleep(cfg.update_ms * 1000);
+        // 8. The Metronome: Precise 1s timing
+        sleep_until_next_tick(&next_tick, cfg.update_ms);
+        tick++;
     }
+
+    cleanup_sensors(&sensors);
     return 0;
 }
