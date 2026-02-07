@@ -40,7 +40,7 @@ void set_defaults(AppConfig *c) {
     SET_STR(c->hw_cpu, "k10temp");
     SET_STR(c->hw_net, "r8169");
     SET_STR(c->hw_ram, "spd5118");
-    SET_STR(c->hw_disk, "nvme"); // <--- NEW Default
+    SET_STR(c->hw_disk, "nvme");
     SET_STR(c->path_monitor, "/sys/class/drm/card1-HDMI-A-1/status");
 
     // Threshold Defaults
