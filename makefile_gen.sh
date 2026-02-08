@@ -45,7 +45,7 @@ all: clean_objs \$(TARGET)
 debug: CFLAGS = \$(BASE_FLAGS) -g -O0
 debug: clean_objs \$(DEBUG_TARGET)
 
-# RELEASE TARGET: Lean and Mean (Optimized for 8700G)
+# RELEASE TARGET: Lean and Mean
 release: CFLAGS = \$(BASE_FLAGS) -O3 -march=native -flto
 release: LDFLAGS = -s
 release: clean_objs \$(RELEASE_TARGET)
