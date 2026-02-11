@@ -1,10 +1,10 @@
 # Manjaro KDE Plasma System Metrics Dashboard: a highly optimized system metrics daemon with a very small running footprint.
 
-# The Components
+The Components
 
 The project is modularized into specialized units to ensure high performance and easy debugging.
 
-# Core Engine
+Core Engine
 
     daemon.c: The orchestrator. It manages the main loop, handles the 1s "Fast Lane" (power/freq) and 5s "Slow Lane" (thermals) polling, and enforces the 30s UI heartbeat.
 
@@ -12,7 +12,7 @@ The project is modularized into specialized units to ensure high performance and
 
     sensors.c / sensors.h: The hardware abstraction layer. This is where we use pread() on low-level file descriptors to bypass the C library's buffering, ensuring frequency data is never "stale."
 
-# Specialized Logic
+Specialized Logic
 
     power_model.c / power_model.h: The brain of the telemetry. It calculates "Wall Watts" using PSU efficiency curves and includes the "Ghost-Buster" filter to ignore 0W reporting spikes common on the Ryzen 8700G or other compatible CPUs and SoCs..
 
@@ -20,7 +20,7 @@ The project is modularized into specialized units to ensure high performance and
 
     json_builder.c / json_builder.h: A lightweight, dependency-free JSON generator. It outputs a minified, single-line payload optimized for the Plasma DataEngine.
 
-# Frontend & Configuration
+Frontend & Configuration
 
     Main.qml: The Plasma 6 widget. It parses the JSON from /dev/shm and handles the visual state, including the dynamic "Red/Amber/Yellow" color-coding for thresholds.
 
@@ -28,7 +28,7 @@ The project is modularized into specialized units to ensure high performance and
 
     Makefile: Configured for your specific development environment. Supports three build targets: debug, build, and release with appropriate optimization levels.
 
-# Key Documentation Highlights for Contributors:
+Key Documentation Highlights for Contributors:
 
     Zero-Malloc Principle: The daemon avoids dynamic memory allocation during the main loop to prevent fragmentation and memory leaks over long-term runs.
 
@@ -36,25 +36,25 @@ The project is modularized into specialized units to ensure high performance and
 
     The "Sync" Logic: In daemon.c, high-priority data is written immediately to RAM, while "Thermal Maturity" and long-term accumulators are synced to the SSD every 5 minutes to protect your hardware.
     
-  
-# Getting Started for Contributors
+    
+Getting Started for Contributors
 
 We follow a high-discipline, "Short Run" development approach. Code is improved in manageable chunks, followed immediately by assessment, debugging, and verification before proceeding to the next iteration 
 Development Environment
 
-I uses Kate as the primary C IDE with Clang. The project is structured around a smart Makefile generator bash script that handles header discovery automatically 
+The lead developer uses Kate as the primary C IDE with Clang. The project is structured around a smart Makefile generator bash script that handles header discovery automatically.
 
-    Project Root: /home/rob/Files/C/ [cite: 2026-02-07].
+    Project Root: /home/rob/Files/C/.
 
     Recommended Kate Shortcuts:
 
-        Ctrl+Meta+D: Build Debug Target [cite: 2026-02-07].
+        Ctrl+Meta+D: Build Debug Target.
 
-        Ctrl+Meta+B: Build Normal Target [cite: 2026-02-07].
-
-        Ctrl+Meta+R: Build Release Target [cite: 2026-02-07].
-
-# Coding Standards
+        Ctrl+Meta+B: Build Normal Target.
+        
+        Ctrl+Meta+R: Build Release Target.
+        
+Coding Standards
 
     No malloc in the Fast Lane: To ensure long-term stability on passive systems, all polling logic must use fixed-size buffers or stack allocation
 
@@ -62,7 +62,7 @@ I uses Kate as the primary C IDE with Clang. The project is structured around a 
 
     Low-Level I/O: Use pread() on file descriptors rather than buffered fscanf for frequency-sensitive sysfs files to bypass the glibc cache
     
-# How to Contribute
+How to Contribute
 
     Iterate Small: Do not submit massive architectural shifts. We prefer small, verified updates that maintain the 1.2 MB footprint.
 
@@ -70,3 +70,4 @@ I uses Kate as the primary C IDE with Clang. The project is structured around a 
 
     Document Logic: If you add a new filter (like our "Ghost-Buster" or "Maturity" logic), include comments explaining the math and the hardware behavior it addresses.
 
+This documentation makes the project feel "alive" and professionally maintained. Your 8-day maturity run and the successful stress test prove that the logic is ready for the world.
