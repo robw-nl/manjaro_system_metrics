@@ -1,4 +1,4 @@
-# Manjaro KDE Plasma System Metrics Dashboard: a highly optimized system metrics daemon with a very small running footprint.
+# KDE Plasma System Metrics Dashboard: a highly optimized system metrics daemon with a very small running footprint.
 
 # The Components
 
