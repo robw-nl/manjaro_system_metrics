@@ -26,7 +26,7 @@ Main.qml: The Plasma 6 widget. It parses the JSON from /dev/shm and handles the 
 
 metrics.conf: The user control center. Contains all hardware-specific calibration values, power loss factors, and UI warning limits.
 
-Makefile: Configured for your specific development environment. Supports three build targets: debug, build, and release with appropriate optimization levels.
+Makefile: Is generated for your specific development environment. Supports three build targets: debug, build, and release with appropriate optimization levels.
 
 # Key Documentation Highlights for Contributors:
 
@@ -39,10 +39,11 @@ The "Sync" Logic: In daemon.c, high-priority data is written immediately to RAM,
     
 # Getting Started for Contributors
 
-We follow a high-discipline, "Short Run" development approach. Code is improved in manageable chunks, followed immediately by assessment, debugging, and verification before proceeding to the next iteration 
-Development Environment
+We follow a high-discipline, "Short Run" development approach. Code is improved in manageable chunks, followed immediately by assessment, debugging, and verification before proceeding to the next iteration.
 
-The lead developer uses Kate as the primary C IDE with Clang. The project is structured around a smart Makefile generator bash script that handles header discovery automatically.
+# Development Environment
+
+Kate is used as the primary C IDE with Clang. The project is structured around a smart Makefile generator bash script that handles header discovery automatically to generate a project specific makefile.
 
     Project Root: /home/rob/Files/C/.
 
