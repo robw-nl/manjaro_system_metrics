@@ -1,75 +1,72 @@
 # Manjaro KDE Plasma System Metrics Dashboard: a highly optimized system metrics daemon with a very small running footprint.
 
-1. Project Overview
-Manjaro System Metrics is a high-efficiency, low-latency dashboard written in C for monitoring system power, thermals, and costs on Manjaro Linux (KDE Plasma).
-It consists of two decoupled components:
+# The Components
 
-The Daemon (C Backend): Reads hardware sensors, performs math, and writes atomic JSON files to RAM (/dev/shm).
+The project is modularized into specialized units to ensure high performance and easy debugging.
 
-The Plasmoid (QML Frontend): A lightweight Plasma widget that parses the JSON and displays the UI.
+# Core Engine
 
-2. Architecture Principles
-Decoupled Design: The frontend (QML) and backend (C) are completely independent. They communicate via text files in shared memory (/dev/shm), ensuring zero latency and no process locking.
+    daemon.c: The orchestrator. It manages the main loop, handles the 1s "Fast Lane" (power/freq) and 5s "Slow Lane" (thermals) polling, and enforces the 30s UI heartbeat.
 
-Metric gathering: performed in a fast lane (1 second) and slow lane (5 second) to ensure minimum resource usage.
+    config.c / config.h: The configuration parser. It implements "Fail-Fast" validation—if a required value in metrics.conf is missing or malformed, the daemon notifies the user via system notification and exits immediately.
 
-Atomic Updates: The daemon writes to a temporary file (.tmp) and renames it (rename()). This guarantees the QML never reads a "half-written" file, preventing UI flickers or crashes.
+    sensors.c / sensors.h: The hardware abstraction layer. This is where we use pread() on low-level file descriptors to bypass the C library's buffering, ensuring frequency data is never "stale."
 
-Minified JSON: The daemon outputs single-line JSON to ensure the Plasma DataEngine reads the entire payload in one event.
+# Specialized Logic
 
-Fail-Fast Configuration: The system refuses to guess. If the configuration file is missing or values are undefined, the daemon alerts the user and exits immediately rather than running with incorrect defaults.
+    power_model.c / power_model.h: The brain of the telemetry. It calculates "Wall Watts" using PSU efficiency curves and includes the "Ghost-Buster" filter to ignore 0W reporting spikes common on the Ryzen 8700G or other compatible CPUs and SoCs..
 
-3. The Components
-File Description
+    discovery.c / discovery.h: Automates hardware pathing. It probes /sys/class/hwmon and /sys/class/drm to dynamically find the correct sensors for your specific motherboard and GPU.
 
-daemon.c
-The main engine. Runs in the background, loops indefinitely, manages timing/syncing.
+    json_builder.c / json_builder.h: A lightweight, dependency-free JSON generator. It outputs a minified, single-line payload optimized for the Plasma DataEngine.
 
-config.c
-Loads metrics.conf. Enforces strict validation: if the file is missing, it sends a system notification and kills the process.
+# Frontend & Configuration
 
-sensors.c
-Handles low-level Linux file reads (CPU freq, temp, uptime, brightness).
+    Main.qml: The Plasma 6 widget. It parses the JSON from /dev/shm and handles the visual state, including the dynamic "Red/Amber/Yellow" color-coding for thresholds.
 
-metrics.conf
-User-editable configuration. All values must be defined here.
+    metrics.conf: The user control center. Contains all hardware-specific calibration values, power loss factors, and UI warning limits.
 
-Main.qml
-The visual layout. Defines the text, colors, and popup behavior.
+    Makefile: Configured for your specific development environment. Supports three build targets: debug, build, and release with appropriate optimization levels.
 
-4. Configuration (metrics.conf)
-Edit this file to tune the system without recompiling. Note: If you delete this file, the daemon will not start.
+# Key Documentation Highlights for Contributors:
 
-Hardware Calibration:
-mobo_overhead: Power loss from motherboard VRMs (e.g., 0.05 = 5%).
-psu_efficiency: Power supply efficiency curve (e.g., 0.85 = 85%).
-mon_base / mon_delta: Monitor power consumption (Base + Brightness factor).
+    Zero-Malloc Principle: The daemon avoids dynamic memory allocation during the main loop to prevent fragmentation and memory leaks over long-term runs.
 
-Costs:
-euro_per_kwh: Cost of electricity (e.g., 0.26).
+    Topology Awareness: In sensors.c, the daemon reads the CPU sibling lists to distinguish between physical cores and logical threads, ensuring the reported MHz average is a realistic representation of system work.
 
-Thresholds:
-limit_mhz_warn: CPU frequency that triggers yellow text.
-limit_temp_crit: CPU temp that triggers red text.
+    The "Sync" Logic: In daemon.c, high-priority data is written immediately to RAM, while "Thermal Maturity" and long-term accumulators are synced to the SSD every 5 minutes to protect your hardware.
+    
+  
+# Getting Started for Contributors
 
-5. Installation & Deployment
-Standard Update Procedure:
-Edit source files.
-Run make to compile.
-Stop the running daemon (killall daemon).
-Copy the new binary to the production folder.
-Restart the daemon.
+We follow a high-discipline, "Short Run" development approach. Code is improved in manageable chunks, followed immediately by assessment, debugging, and verification before proceeding to the next iteration 
+Development Environment
 
-6. Troubleshooting
-Problem: The dashboard shows empty -- lines.
-Cause: Daemon is not running, or QML cannot find the file.
-Fix: Run pidof daemon. Check if /dev/shm/dashboard_panel.txt exists.
+I uses Kate as the primary C IDE with Clang. The project is structured around a smart Makefile generator bash script that handles header discovery automatically 
 
-Problem: The popup shows "JSON ERROR".
-Cause: The daemon is outputting invalid JSON (e.g., unexpected newlines).
-Fix: Ensure daemon.c is using the "Minified JSON" format (no \n inside the string).
+    Project Root: /home/rob/Files/C/ [cite: 2026-02-07].
 
-Problem: Daemon starts but immediately quits.
-Cause: metrics.conf is missing or unreadable.
-Fix: Check your desktop notifications for a "Startup Failed" error. Verify the config file is in the same folder as the binary.
+    Recommended Kate Shortcuts:
+
+        Ctrl+Meta+D: Build Debug Target [cite: 2026-02-07].
+
+        Ctrl+Meta+B: Build Normal Target [cite: 2026-02-07].
+
+        Ctrl+Meta+R: Build Release Target [cite: 2026-02-07].
+
+# Coding Standards
+
+    No malloc in the Fast Lane: To ensure long-term stability on passive systems, all polling logic must use fixed-size buffers or stack allocation
+
+    Topology Awareness: All CPU metrics must distinguish between physical cores and SMT threads to ensure accurate system-wide averages
+
+    Low-Level I/O: Use pread() on file descriptors rather than buffered fscanf for frequency-sensitive sysfs files to bypass the glibc cache
+    
+# How to Contribute
+
+    Iterate Small: Do not submit massive architectural shifts. We prefer small, verified updates that maintain the 1.2 MB footprint.
+
+    Verify on Hardware: If you are testing on Intel or ARM, please note your hardware specs (e.g., NUC, Raspberry Pi) in the PR.
+
+    Document Logic: If you add a new filter (like our "Ghost-Buster" or "Maturity" logic), include comments explaining the math and the hardware behavior it addresses.
 
